@@ -3,6 +3,9 @@
 SET max_memory_usage = '1Gi';
 SET group_by_two_level_threshold_bytes = 50000000;
 SET enable_lazy_columns_replication = 0;
+SET optimize_aggregation_in_order = 0;
+SET max_bytes_before_external_group_by = 0;
+SET max_bytes_ratio_before_external_group_by = 0.5;
 
 DROP TABLE IF EXISTS t_aggregation_memory_tracker;
 CREATE TABLE t_aggregation_memory_tracker (c1 String, c2 String, c3 DateTime64(3)) ENGINE = MergeTree ORDER BY (c1, c3);
