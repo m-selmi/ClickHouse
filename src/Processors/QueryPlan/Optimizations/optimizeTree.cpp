@@ -253,6 +253,13 @@ void optimizeTreeSecondPass(
 
     /// Before the join reordering and index analysis below, which read the join kinds it rewrites and the derived IS NOT NULL filters.
     const bool not_null_filters_were_added = convertOuterToInnerAndAddNotNullFilters(optimization_settings, root, nodes);
+    if (not_null_filters_were_added && optimization_settings.merge_filters)
+    {
+        traverseQueryPlan(stack, root, [&](auto & frame_node)
+        {
+            tryMergeFilters(&frame_node, nodes, extra_settings);
+        });
+    }
 
     /// Before index analysis, so the copied conjuncts take part in it, and before the runtime
     /// filters, which would hide the source filters
@@ -357,7 +364,7 @@ void optimizeTreeSecondPass(
     /// A new filter node has to be pushed down. Runtime filters are re-merged unconditionally as
     /// before; a copied predicate alone is no reason to run a rewrite the user turned off
     const bool rewrite_regardless_of_settings = join_runtime_filters_were_added;
-    if (join_runtime_filters_were_added || predicates_were_propagated || not_null_filters_were_added)
+    if (join_runtime_filters_were_added || predicates_were_propagated)
     {
         traverseQueryPlan(stack, root,
             [&](auto & frame_node)
@@ -846,8 +853,7 @@ void optimizeTreeSecondPass(
 
     /// The merges above rebuild `FilterStep`s and drop the QCC key, so re-walk to set it again
     if (optimization_settings.use_query_condition_cache
-        && (join_runtime_filters_were_added || predicates_were_propagated || lazy_materialization_applied
-            || not_null_filters_were_added))
+        && (join_runtime_filters_were_added || predicates_were_propagated || lazy_materialization_applied))
     {
         Stack qcc_stack;
         qcc_stack.push_back({.node = &root});
