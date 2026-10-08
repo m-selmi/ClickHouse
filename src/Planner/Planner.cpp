@@ -577,8 +577,7 @@ public:
         const auto & query_context = planner_context->getQueryContext();
         const auto & settings = query_context->getSettingsRef();
 
-        aggregate_overflow_row = query_node.isGroupByWithTotals() && settings[Setting::max_rows_to_group_by]
-            && settings[Setting::group_by_overflow_mode] == OverflowMode::ANY && settings[Setting::totals_mode] != TotalsMode::AFTER_HAVING_EXCLUSIVE;
+        aggregate_overflow_row = hasAggregateOverflowRow(query_node, settings);
         aggregate_final = query_processing_info.getToStage() > QueryProcessingStage::WithMergeableState
             && !query_node.isGroupByWithTotals() && !query_node.isGroupByWithRollup() && !query_node.isGroupByWithCube();
         aggregation_with_rollup_or_cube_or_grouping_sets = query_node.isGroupByWithRollup() || query_node.isGroupByWithCube() ||
@@ -665,6 +664,13 @@ public:
     bool is_limit_by_offset_negative = false;
 };
 
+void addInToJoinSteps(
+    const PlannerContextPtr & planner_context,
+    QueryPlan & query_plan,
+    const InToJoinAnalysisResults & in_to_join,
+    const SelectQueryOptions & select_query_options,
+    UsefulSets & useful_sets);
+
 template <size_t size>
 ALWAYS_INLINE void addExpressionStep(
     const PlannerContextPtr & planner_context,
@@ -692,6 +698,25 @@ ALWAYS_INLINE void addExpressionStep(
         }
         buildQueryPlanForCorrelatedSubquery(planner_context, query_plan, correlated_subquery, select_query_options);
     }
+    addInToJoinSteps(planner_context, query_plan, in_to_join, select_query_options, useful_sets);
+
+    auto actions = std::move(expression_actions->dag);
+    if (expression_actions->project_input)
+        actions.appendInputsForUnusedColumns(*query_plan.getCurrentHeader());
+
+    auto expression_step = std::make_unique<ExpressionStep>(query_plan.getCurrentHeader(), std::move(actions));
+    appendSetsFromActionsDAG(expression_step->getExpression(), useful_sets);
+    expression_step->setStepDescription(step_description);
+    query_plan.addStep(std::move(expression_step));
+}
+
+void addInToJoinSteps(
+    const PlannerContextPtr & planner_context,
+    QueryPlan & query_plan,
+    const InToJoinAnalysisResults & in_to_join,
+    const SelectQueryOptions & select_query_options,
+    UsefulSets & useful_sets)
+{
     for (const auto & in_to_join_subquery : in_to_join)
     {
         if (auto key_actions = in_to_join_subquery.key_actions)
@@ -704,15 +729,6 @@ ALWAYS_INLINE void addExpressionStep(
                 nullptr, nullptr, nullptr,
                 collectFiltersForAnalysis(in_to_join_subquery.subquery.subquery, select_query_options, /*post_filter=*/ nullptr)));
     }
-
-    auto actions = std::move(expression_actions->dag);
-    if (expression_actions->project_input)
-        actions.appendInputsForUnusedColumns(*query_plan.getCurrentHeader());
-
-    auto expression_step = std::make_unique<ExpressionStep>(query_plan.getCurrentHeader(), std::move(actions));
-    appendSetsFromActionsDAG(expression_step->getExpression(), useful_sets);
-    expression_step->setStepDescription(step_description);
-    query_plan.addStep(std::move(expression_step));
 }
 
 template <size_t size>
@@ -728,18 +744,7 @@ ALWAYS_INLINE void addFilterStep(
     {
         buildQueryPlanForCorrelatedSubquery(planner_context, query_plan, correlated_subquery, select_query_options);
     }
-    for (const auto & in_to_join_subquery : filter_analysis_result.in_to_join)
-    {
-        if (auto key_actions = in_to_join_subquery.key_actions)
-            addExpressionStep(
-                planner_context, query_plan, key_actions, in_to_join_subquery.key_correlated_subtrees,
-                select_query_options, "Compute the left arguments of IN", useful_sets);
-        buildQueryPlanForUncorrelatedInSubquery(
-            planner_context, query_plan, in_to_join_subquery.subquery, select_query_options,
-            std::make_shared<GlobalPlannerContext>(
-                nullptr, nullptr, nullptr,
-                collectFiltersForAnalysis(in_to_join_subquery.subquery.subquery, select_query_options, /*post_filter=*/ nullptr)));
-    }
+    addInToJoinSteps(planner_context, query_plan, filter_analysis_result.in_to_join, select_query_options, useful_sets);
 
     auto actions = std::move(filter_analysis_result.filter_actions->dag);
     if (filter_analysis_result.filter_actions->project_input)
@@ -1295,6 +1300,7 @@ void addTotalsHavingStep(QueryPlan & query_plan,
 
     for (const auto & correlated_subquery : having_analysis_result.correlated_subtrees.subqueries)
         buildQueryPlanForCorrelatedSubquery(planner_context, query_plan, correlated_subquery, select_query_options);
+    addInToJoinSteps(planner_context, query_plan, having_analysis_result.in_to_join, select_query_options, useful_sets);
 
     std::optional<ActionsDAG> actions;
     if (having_analysis_result.filter_actions)

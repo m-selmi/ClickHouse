@@ -13,3 +13,7 @@
 0	1
 -- `Array(UInt8)` against `Array(Bool)`, a cast that throws on a value the element type cannot hold
 0	1
+-- IN read on the totals row of the query
+0	1
+-- IN read on the totals row of a subquery
+0	1

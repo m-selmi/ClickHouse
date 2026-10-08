@@ -21,6 +21,7 @@
 #include <Planner/Planner.h>
 #include <Planner/PlannerContext.h>
 #include <Planner/PlannerUncorrelatedSubqueries.h>
+#include <Planner/Utils.h>
 
 #include <unordered_set>
 
@@ -202,7 +203,10 @@ private:
         {
             /// Another query plans its own `IN` with its own context, so this walk leaves them their sets.
             if (visits_planned_query)
+            {
                 query_node = node;
+                carries_totals = node->as<QueryNode &>().isGroupByWithTotals() || queryHasWithTotalsInAnySubqueryInJoinTree(node);
+            }
             return;
         }
 
@@ -296,6 +300,17 @@ private:
             || node == typed_query_node.getInterpolate())
             return true;
 
+        /// These clauses are also computed for the `WITH TOTALS` row, and a join never matches that row
+        /// against the subquery, so `IN` would always be false there.
+        if (carries_totals && (node == typed_query_node.getWindowNode() || node == typed_query_node.getProjectionNode()
+                || node == typed_query_node.getOrderByNode() || node == typed_query_node.getLimitByNode()))
+            return true;
+
+        /// A join drops the `AggregatedChunkInfo` that tells `TotalsHavingStep` which row is the overflow row.
+        if (node == typed_query_node.getHaving()
+            && hasAggregateOverflowRow(typed_query_node, planner_context.getQueryContext()->getSettingsRef()))
+            return true;
+
         const auto * function_node = node->as<FunctionNode>();
         if (!function_node)
             return false;
@@ -311,6 +326,8 @@ private:
     const bool visits_planned_query;
     /// The query being visited.
     QueryTreeNodePtr query_node;
+    /// Whether the stream of the query has a totals row by the time its window functions and projection are computed.
+    bool carries_totals = false;
     /// The scopes being walked, innermost last.
     std::vector<InToJoinScope> scope_stack;
     int blocked_depth = 0;

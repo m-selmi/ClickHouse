@@ -45,6 +45,14 @@ SELECT '-- `Array(UInt8)` against `Array(Bool)`, a cast that throws on a value t
 SELECT countIf(explain LIKE '%Join%') > 0, countIf(explain LIKE '%Set%') > 0
 FROM (EXPLAIN SELECT CAST([arr[1]], 'Array(UInt8)') IN (SELECT [true]) AS c FROM t);
 
+SELECT '-- IN read on the totals row of the query';
+SELECT countIf(explain LIKE '%Join%') > 0, countIf(explain LIKE '%Set%') > 0
+FROM (EXPLAIN SELECT id, id + 1 IN (SELECT k FROM s) FROM t GROUP BY id WITH TOTALS);
+
+SELECT '-- IN read on the totals row of a subquery';
+SELECT countIf(explain LIKE '%Join%') > 0, countIf(explain LIKE '%Set%') > 0
+FROM (EXPLAIN SELECT id, id + 1 IN (SELECT k FROM s) FROM (SELECT id FROM t GROUP BY id WITH TOTALS));
+
 DROP TABLE t;
 DROP TABLE s;
 DROP TABLE w;
