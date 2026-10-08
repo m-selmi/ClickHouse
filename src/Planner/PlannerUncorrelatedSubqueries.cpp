@@ -216,6 +216,10 @@ bool canRewriteInToJoin(
     if (subquery_columns.empty())
         return false;
 
+    /// A set ignores the `WITH TOTALS` row of its subquery, but a join would add it to the query.
+    if (queryTreeHasWithTotalsInAnySubqueryInJoinTree(arguments[1].get()))
+        return false;
+
     const auto & left_key = arguments[0];
     if (left_key->as<ConstantNode>())
         return false;
