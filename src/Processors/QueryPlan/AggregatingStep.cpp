@@ -70,11 +70,7 @@ namespace QueryPlanSerializationSetting
     extern const QueryPlanSerializationSettingsUInt64 adaptive_aggregator_freeze_threshold_bytes;
     extern const QueryPlanSerializationSettingsBool serialize_string_in_memory_with_zero_byte;
     extern const QueryPlanSerializationSettingsBool enable_packed_string_keys_in_aggregation;
-}
-
-namespace Setting
-{
-    extern const SettingsBool use_aggregation_memory_tracker;
+    extern const QueryPlanSerializationSettingsBool use_aggregation_memory_tracker;
 }
 
 namespace ErrorCodes
@@ -1110,6 +1106,12 @@ void AggregatingStep::serializeSettings(QueryPlanSerializationSettings & setting
             = params.adaptive_aggregator_freeze_threshold_bytes;
     }
 
+    /// A peer predating the name keeps its own two-level decision: writing an unknown name would make it throw
+    /// while reading the strict named schema, which would break every distributed `GROUP BY` of a query that
+    /// sets `use_aggregation_memory_tracker` or a `compatibility` below the release that fixes the regression.
+    if (version >= DBMS_MIN_QUERY_PLAN_SERIALIZATION_VERSION_WITH_AGGREGATION_MEMORY_TRACKER)
+        settings[QueryPlanSerializationSetting::use_aggregation_memory_tracker] = params.use_aggregation_memory_tracker;
+
     /// Both values, every version: a peer predating the name serializes String keys the way `false` does, so
     /// omitting either one would silently leave it on the other layout.
     settings[QueryPlanSerializationSetting::serialize_string_in_memory_with_zero_byte] = params.serialize_string_with_zero_byte;
@@ -1344,7 +1346,7 @@ QueryPlanStepPtr AggregatingStep::deserialize(Deserialization & ctx)
         ctx.settings[QueryPlanSerializationSetting::enable_adaptive_aggregator],
         ctx.settings[QueryPlanSerializationSetting::adaptive_aggregator_freeze_threshold],
         ctx.settings[QueryPlanSerializationSetting::adaptive_aggregator_freeze_threshold_bytes],
-        ctx.context->getSettingsRef()[Setting::use_aggregation_memory_tracker]};
+        ctx.settings[QueryPlanSerializationSetting::use_aggregation_memory_tracker]};
 
     auto aggregating_step = std::make_unique<AggregatingStep>(
         ctx.input_headers.front(),
