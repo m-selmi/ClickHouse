@@ -1,6 +1,7 @@
 #include <Core/NamesAndTypes.h>
 #include <Planner/PlannerUncorrelatedSubqueries.h>
 
+#include <algorithm>
 #include <ranges>
 
 #include <Analyzer/ColumnNode.h>
@@ -48,24 +49,21 @@ extern const int LOGICAL_ERROR;
 namespace Setting
 {
 
+extern const SettingsJoinAlgorithm join_algorithm;
 extern const SettingsBool join_use_nulls;
-extern const SettingsUInt64 max_bytes_in_set;
-extern const SettingsUInt64 max_rows_in_set;
 extern const SettingsBool rewrite_in_to_join;
-extern const SettingsOverflowMode set_overflow_mode;
 
 }
 
 namespace
 {
 
-/// The join is an implementation detail of `IN`, so it is configured like the set it replaces.
-void applySetSemantics(JoinStepLogical & join_step, const Settings & settings)
+/// The join is an implementation detail of `IN`, so the join size limits of the query do not apply to it.
+void makeJoinUnbounded(JoinStepLogical & join_step)
 {
     auto & join_settings = join_step.getJoinSettings();
-    join_settings.join_algorithms = {JoinAlgorithm::PARALLEL_HASH, JoinAlgorithm::HASH};
-    join_settings.max_rows_in_join = settings[Setting::max_rows_in_set];
-    join_settings.max_bytes_in_join = settings[Setting::max_bytes_in_set];
+    join_settings.max_rows_in_join = 0;
+    join_settings.max_bytes_in_join = 0;
     join_settings.join_overflow_mode = OverflowMode::THROW;
 }
 
@@ -204,8 +202,13 @@ bool canRewriteInToJoin(
     if (!settings[Setting::rewrite_in_to_join])
         return false;
 
-    /// The join can only throw on overflow, so a truncated set has no equivalent.
-    if (settings[Setting::set_overflow_mode] != OverflowMode::THROW && (settings[Setting::max_rows_in_set] || settings[Setting::max_bytes_in_set]))
+    const std::vector<JoinAlgorithm> join_algorithms = settings[Setting::join_algorithm];
+    if (!std::ranges::any_of(join_algorithms, [](JoinAlgorithm algorithm)
+        {
+            return algorithm == JoinAlgorithm::DEFAULT || algorithm == JoinAlgorithm::HASH || algorithm == JoinAlgorithm::PARALLEL_HASH
+                || algorithm == JoinAlgorithm::GRACE_HASH || algorithm == JoinAlgorithm::AUTO
+                || algorithm == JoinAlgorithm::PARTIAL_MERGE || algorithm == JoinAlgorithm::PREFER_PARTIAL_MERGE;
+        }))
         return false;
 
     const auto & arguments = function_node.getArguments().getNodes();
@@ -328,7 +331,7 @@ void buildQueryPlanForUncorrelatedInSubquery(
         JoinSettings(settings, planner_context->getQueryContext()->getJoinAnalyzeMode()),
         SortingStep::Settings(settings));
     join_step->setStepDescription("JOIN to evaluate IN");
-    applySetSemantics(*join_step, settings);
+    makeJoinUnbounded(*join_step);
 
     std::vector<QueryPlanPtr> plans;
     plans.emplace_back(std::make_unique<QueryPlan>(std::move(query_plan)));
