@@ -73,6 +73,11 @@ namespace QueryPlanSerializationSetting
     extern const QueryPlanSerializationSettingsBool use_aggregation_memory_tracker;
 }
 
+namespace Setting
+{
+    extern const SettingsBool use_aggregation_memory_tracker;
+}
+
 namespace ErrorCodes
 {
     extern const int LOGICAL_ERROR;
@@ -1346,7 +1351,9 @@ QueryPlanStepPtr AggregatingStep::deserialize(Deserialization & ctx)
         ctx.settings[QueryPlanSerializationSetting::enable_adaptive_aggregator],
         ctx.settings[QueryPlanSerializationSetting::adaptive_aggregator_freeze_threshold],
         ctx.settings[QueryPlanSerializationSetting::adaptive_aggregator_freeze_threshold_bytes],
-        ctx.settings[QueryPlanSerializationSetting::use_aggregation_memory_tracker]};
+        ctx.version >=DBMS_MIN_QUERY_PLAN_SERIALIZATION_VERSION_WITH_AGGREGATION_MEMORY_TRACKER
+            ? bool(ctx.settings[QueryPlanSerializationSetting::use_aggregation_memory_tracker])
+            : bool(ctx.context->getSettingsRef()[Setting::use_aggregation_memory_tracker])};
 
     auto aggregating_step = std::make_unique<AggregatingStep>(
         ctx.input_headers.front(),

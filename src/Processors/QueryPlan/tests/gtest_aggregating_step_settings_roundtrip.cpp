@@ -6,6 +6,7 @@
 #include <IO/ReadBufferFromString.h>
 #include <IO/WriteBufferFromString.h>
 #include <Interpreters/Aggregator.h>
+#include <Interpreters/Context.h>
 #include <Interpreters/SetSerialization.h>
 #include <Processors/QueryPlan/AggregatingStep.h>
 #include <Processors/QueryPlan/MergingAggregatedStep.h>
@@ -222,21 +223,25 @@ QueryPlanSerializationSettings writeAndReadSettings(const IQueryPlanStep & step,
     return read;
 }
 
-bool deserializedUseAggregationMemoryTracker(bool value)
+bool deserializedUseAggregationMemoryTracker(
+    bool value, UInt64 version = DBMS_QUERY_PLAN_SERIALIZATION_VERSION, bool receiver_session_value = true)
 {
     auto params = makeParams(true);
     params.use_aggregation_memory_tracker = value;
     auto step = makeAggregatingStepFromParams(std::move(params));
 
-    String bytes = serializeStep(*step, DBMS_QUERY_PLAN_SERIALIZATION_VERSION);
-    QueryPlanSerializationSettings settings = writeAndReadSettings(*step, DBMS_QUERY_PLAN_SERIALIZATION_VERSION);
+    String bytes = serializeStep(*step, version);
+    QueryPlanSerializationSettings settings = writeAndReadSettings(*step, version);
+
+    auto receiver_context = Context::createCopy(getContext().context);
+    receiver_context->setSetting("use_aggregation_memory_tracker", Field(receiver_session_value));
 
     ReadBufferFromString in(bytes);
     DeserializedSetsRegistry registry;
     auto header = makeHeader();
     SharedHeaders input_headers{header};
     IQueryPlanStep::Deserialization ctx{
-        in, registry, {}, getContext().context, input_headers, header, settings, 0, DBMS_QUERY_PLAN_SERIALIZATION_VERSION, 0, false};
+        in, registry, {}, receiver_context, input_headers, header, settings, 0, version, 0, false};
 
     auto restored = AggregatingStep::deserialize(ctx);
     return typeid_cast<AggregatingStep &>(*restored).getParams().use_aggregation_memory_tracker;
@@ -252,6 +257,21 @@ TEST(AggregatingStepSettingsRoundTrip, UseAggregationMemoryTrackerSurvivesDeseri
     /// The receiver's session keeps the default `true`, so `false` is the direction that diverges.
     EXPECT_FALSE(deserializedUseAggregationMemoryTracker(false));
     EXPECT_TRUE(deserializedUseAggregationMemoryTracker(true));
+}
+
+TEST(AggregatingStepSettingsRoundTrip, UseAggregationMemoryTrackerFromReceiverSessionForOlderStreams)
+{
+    tryRegisterFunctions();
+    tryRegisterAggregateFunctions();
+
+    /// An older stream does not carry the name, so the receiver's session decides, not the default `true`.
+    constexpr UInt64 older_version = DBMS_MIN_QUERY_PLAN_SERIALIZATION_VERSION_WITH_AGGREGATION_MEMORY_TRACKER - 1;
+    EXPECT_FALSE(deserializedUseAggregationMemoryTracker(true, older_version, /*receiver_session_value=*/false));
+    EXPECT_TRUE(deserializedUseAggregationMemoryTracker(false, older_version, /*receiver_session_value=*/true));
+
+    /// A current stream carries the initiator's value, whatever the receiver's session says.
+    EXPECT_FALSE(deserializedUseAggregationMemoryTracker(false, DBMS_QUERY_PLAN_SERIALIZATION_VERSION, /*receiver_session_value=*/true));
+    EXPECT_TRUE(deserializedUseAggregationMemoryTracker(true, DBMS_QUERY_PLAN_SERIALIZATION_VERSION, /*receiver_session_value=*/false));
 }
 
 TEST(AggregatingStepSettingsRoundTrip, UseAggregationMemoryTrackerNotWrittenToOlderPeers)
